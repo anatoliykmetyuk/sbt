@@ -10,6 +10,7 @@ package sbt
 package internal
 
 import sbt.BuildPaths.*
+import sbt.BuildPaths.defaultVersionedGlobalBase
 import sbt.Def.{ ScopeLocal, ScopedKey, Setting, isDummy }
 import sbt.Keys.*
 import sbt.Project.inScope
@@ -50,7 +51,9 @@ private[sbt] object Load {
   ): (() => Eval, BuildStructure) = {
     val (base, config) = timed("Load.defaultLoad until apply", log) {
       val globalBase = getGlobalBase(state)
+      log.info(s"[GlobalPlugin.defaultLoad] globalBase: $globalBase")
       val base = baseDirectory.getCanonicalFile
+      log.info(s"[GlobalPlugin.defaultLoad] baseDirectory: $base, isPlugin: $isPlugin")
       val rawConfig = defaultPreGlobal(state, base, globalBase, log)
       val config0 = defaultWithGlobal(state, base, rawConfig, globalBase)
       val config =
@@ -157,8 +160,25 @@ private[sbt] object Load {
       rawConfig: LoadBuildConfiguration,
       globalBase: File,
   ): LoadBuildConfiguration = {
-    val globalPluginsDir = getGlobalPluginsDirectory(state, globalBase)
-    val withGlobal = loadGlobal(state, base, globalPluginsDir, rawConfig)
+    val log = rawConfig.log
+
+    // Compute binary version path - this is what sbt traditionally uses (maintains parity with sbt 1.x)
+    val fullVersionString = state.configuration.provider.id.version
+    val binaryVersion = sbt.internal.librarymanagement.cross.CrossVersionUtil
+      .binarySbtVersion(fullVersionString)
+    val binaryVersionGlobalBase = defaultVersionedGlobalBase(binaryVersion)
+    import sbt.io.syntax.*
+    val binaryVersionPluginsDir = binaryVersionGlobalBase / "plugins"
+
+    log.info(s"[GlobalPlugin.defaultWithGlobal] Full version string: $fullVersionString")
+    log.info(s"[GlobalPlugin.defaultWithGlobal] Binary version: $binaryVersion")
+    log.info(
+      s"[GlobalPlugin.defaultWithGlobal] Binary version plugins dir: $binaryVersionPluginsDir"
+    )
+    log.info(s"[GlobalPlugin.defaultWithGlobal] Current globalBase: $globalBase")
+
+    val withGlobal =
+      loadGlobal(state, base, binaryVersionPluginsDir, rawConfig)
     val globalSettings: Seq[VirtualFile] =
       configurationSources(getGlobalSettingsDirectory(state, globalBase))
         .map(x => rawConfig.converter.toVirtualFile(x.toPath))
@@ -204,11 +224,45 @@ private[sbt] object Load {
       base: File,
       global: File,
       config: LoadBuildConfiguration
-  ): LoadBuildConfiguration =
+  ): LoadBuildConfiguration = {
+    val log = config.log
+    log.info(s"[GlobalPlugin.loadGlobal] START: base=$base, global=$global")
+    log.info(s"[GlobalPlugin.loadGlobal] Directory exists: ${global.exists()}")
+
     if (base != global && global.exists) {
-      val gp = GlobalPlugin.load(global, state, config)
-      config.copy(globalPlugin = Some(gp))
-    } else config
+      val hasDef = hasDefinition(global)
+      log.info(s"[GlobalPlugin.loadGlobal] Directory has plugin definitions: $hasDef")
+      if (hasDef) {
+        import sbt.io.syntax.*
+        val files = (global * -GlobFilter(DefaultTargetName)).get()
+        log.info(s"[GlobalPlugin.loadGlobal] Plugin files found: ${files.mkString(", ")}")
+        try {
+          val gp = GlobalPlugin.load(global, state, config)
+          log.info(s"[GlobalPlugin.loadGlobal] ✓ Successfully loaded global plugin from: $global")
+          return config.copy(globalPlugin = Some(gp))
+        } catch {
+          case e: Exception =>
+            log.warn(
+              s"[GlobalPlugin.loadGlobal] ✗ Failed to load global plugin: ${e.getMessage}"
+            )
+            log.debug(
+              s"[GlobalPlugin.loadGlobal] Exception: ${e.getClass.getName} - ${e.getMessage}"
+            )
+        }
+      } else {
+        log.info(s"[GlobalPlugin.loadGlobal] No plugin definitions found in: $global")
+      }
+    } else {
+      if (base == global) {
+        log.info(s"[GlobalPlugin.loadGlobal] Skipping (base == global)")
+      } else if (!global.exists) {
+        log.info(s"[GlobalPlugin.loadGlobal] Skipping (directory does not exist): $global")
+      }
+    }
+
+    log.info(s"[GlobalPlugin.loadGlobal] END: No global plugin loaded")
+    config
+  }
 
   def defaultDelegates: LoadedBuild => Scope => Seq[Scope] = (lb: LoadedBuild) => {
     val rootProject = getRootProject(lb.units)

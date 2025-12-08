@@ -36,10 +36,13 @@ object CrossVersionUtil {
    * Returns sbt binary interface x.y API compatible with the given version string v.
    * RCs for x.y.0 are considered API compatible.
    * Compatible versions include 0.12.0-1 and 0.12.0-RC1 for Some(0, 12).
+   * Also handles -bin-SNAPSHOT versions like 2.0.0-RC6-bin-SNAPSHOT.
    */
   private[sbt] def sbtApiVersion(v: String): Option[(Long, Long)] = v match {
     case ReleaseV(x, y, _, _)   => Some(sbtApiVersion(x.toLong, y.toLong))
     case CandidateV(x, y, _, _) => Some(sbtApiVersion(x.toLong, y.toLong))
+    case BinCompatV(x, y, _, _, _) if x.toLong > 0 =>
+      Some(sbtApiVersion(x.toLong, y.toLong))
     case NonReleaseV_n(x, y, z, _) if x.toLong == 0 && z.toLong > 0 =>
       Some(sbtApiVersion(x.toLong, y.toLong))
     case NonReleaseV_n(x, y, z, _) if x.toLong > 0 && (y.toLong > 0 || z.toLong > 0) =>
