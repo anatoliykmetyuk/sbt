@@ -163,20 +163,24 @@ public final class WorkerMain {
                   }
                 })
             .toArray(URL[]::new);
-    // Use filtering classloader to prevent test code from accessing sbt's Gson from system
-    // classloader
-    // while still allowing system classes to use it internally
+    // Use filtering classloader to prevent test code from accessing sbt's Gson and Framework
+    // from system classloader, while allowing ForkTestMain to load Framework for test execution.
+    // This ensures test code uses project's dependencies from classpath instead of .sbt/boot.
     ClassLoader filteringParent = new FilteringClassLoader(parent);
     return new URLClassLoader(urls, filteringParent);
   }
 
   /**
-   * A classloader that filters out Gson classes, preventing test code from accessing sbt's Gson
-   * from the system classloader. This ensures test code uses the project's Gson version from the
-   * classpath instead of sbt's Gson from .sbt/boot.
+   * A classloader that filters out sbt's internal dependencies (Gson, Framework/test-interface)
+   * from the system classloader, preventing test code from accessing them. This ensures test code
+   * uses the project's dependencies from the classpath instead of sbt's dependencies from
+   * .sbt/boot.
    *
-   * <p>For non-Gson classes, this classloader delegates to the system classloader normally,
-   * allowing system classes (like Framework) to be loaded correctly.
+   * <p>Framework classes are conditionally allowed: they can be loaded when called from
+   * ForkTestMain (sbt.internal.worker1 package) to enable test framework loading, but are filtered
+   * out when called from test code to prevent .sbt/boot leak.
+   *
+   * <p>For non-filtered classes, this classloader delegates to the system classloader normally.
    */
   private static class FilteringClassLoader extends ClassLoader {
     private final ClassLoader systemLoader;
@@ -188,11 +192,153 @@ public final class WorkerMain {
 
     @Override
     protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-      // Filter out Gson classes - don't delegate to system classloader
+      // #region agent log
+      try {
+        String logEntry =
+            String.format(
+                "{\"id\":\"log_%d_001\",\"timestamp\":%d,\"location\":\"WorkerMain.java:195\",\"message\":\"FilteringClassLoader.loadClass called\",\"data\":{\"className\":\"%s\",\"resolve\":%s},\"sessionId\":\"debug-session\",\"runId\":\"pre-fix\",\"hypothesisId\":\"A,B,C\"}\n",
+                System.currentTimeMillis(),
+                System.currentTimeMillis(),
+                name.replace("\"", "\\\""),
+                resolve);
+        java.nio.file.Files.write(
+            java.nio.file.Paths.get("/Users/anatolii/Projects/STA/sbt/.cursor/debug.log"),
+            logEntry.getBytes("UTF-8"),
+            java.nio.file.StandardOpenOption.CREATE,
+            java.nio.file.StandardOpenOption.APPEND);
+      } catch (Exception e) {
+      }
+      // #endregion
+
+      // Filter out Gson classes - always filter, don't delegate to system classloader
       // This prevents test code from accessing sbt's Gson
       if (name.startsWith("com.google.gson.")) {
+        // #region agent log
+        try {
+          java.nio.file.Files.write(
+              java.nio.file.Paths.get("/Users/anatolii/Projects/STA/sbt/.cursor/debug.log"),
+              String.format(
+                      "{\"id\":\"log_%d_002\",\"timestamp\":%d,\"location\":\"WorkerMain.java:201\",\"message\":\"Gson class filtered\",\"data\":{\"className\":\"%s\"},\"sessionId\":\"debug-session\",\"runId\":\"pre-fix\",\"hypothesisId\":\"A\"}\n",
+                      System.currentTimeMillis(), System.currentTimeMillis(), name)
+                  .getBytes("UTF-8"),
+              java.nio.file.StandardOpenOption.CREATE,
+              java.nio.file.StandardOpenOption.APPEND);
+        } catch (Exception e) {
+        }
+        // #endregion
         throw new ClassNotFoundException(name + " filtered out (use project's Gson instead)");
       }
+
+      // For Framework/test-interface classes, check if caller is from ForkTestMain
+      if (name.startsWith("sbt.testing.") || name.startsWith("org.scalatools.testing.")) {
+        StackTraceElement[] stack = Thread.currentThread().getStackTrace();
+        // #region agent log
+        try {
+          java.util.List<String> stackClasses = new java.util.ArrayList<>();
+          for (int i = 0; i < stack.length && i < 15; i++) {
+            stackClasses.add(
+                stack[i].getClassName()
+                    + "."
+                    + stack[i].getMethodName()
+                    + ":"
+                    + stack[i].getLineNumber());
+          }
+          String stackJson = new Gson().toJson(stackClasses);
+          String logEntry =
+              String.format(
+                  "{\"id\":\"log_%d_003\",\"timestamp\":%d,\"location\":\"WorkerMain.java:208\",\"message\":\"Framework class access detected\",\"data\":{\"className\":\"%s\",\"stackTrace\":%s,\"stackLength\":%d},\"sessionId\":\"debug-session\",\"runId\":\"pre-fix\",\"hypothesisId\":\"A,B,C\"}\n",
+                  System.currentTimeMillis(),
+                  System.currentTimeMillis(),
+                  name.replace("\"", "\\\""),
+                  stackJson,
+                  stack.length);
+          java.nio.file.Files.write(
+              java.nio.file.Paths.get("/Users/anatolii/Projects/STA/sbt/.cursor/debug.log"),
+              logEntry.getBytes("UTF-8"),
+              java.nio.file.StandardOpenOption.CREATE,
+              java.nio.file.StandardOpenOption.APPEND);
+        } catch (Exception e) {
+        }
+        // #endregion
+
+        // Check if any caller is from sbt.internal.worker1 package (ForkTestMain, WorkerMain, etc.)
+        boolean calledFromWorker = false;
+        java.util.List<String> checkedClasses = new java.util.ArrayList<>();
+        // Skip frames 0-1 (getStackTrace, loadClass) and check callers
+        // Need to check more frames (up to 20) because the call path goes through multiple
+        // ClassLoader methods before reaching ForkTestMain
+        for (int i = 2; i < stack.length && i < 20; i++) {
+          String className = stack[i].getClassName();
+          checkedClasses.add(className);
+          // Allow if called from sbt.internal.worker1 package (ForkTestMain needs Framework)
+          if (className.startsWith("sbt.internal.worker1.")) {
+            calledFromWorker = true;
+            // #region agent log
+            try {
+              String checkedJson = new Gson().toJson(checkedClasses);
+              String logEntry =
+                  String.format(
+                      "{\"id\":\"log_%d_004\",\"timestamp\":%d,\"location\":\"WorkerMain.java:220\",\"message\":\"Framework access allowed from worker\",\"data\":{\"className\":\"%s\",\"caller\":\"%s\",\"frameIndex\":%d,\"checkedClasses\":%s},\"sessionId\":\"debug-session\",\"runId\":\"pre-fix\",\"hypothesisId\":\"A\"}\n",
+                      System.currentTimeMillis(),
+                      System.currentTimeMillis(),
+                      name.replace("\"", "\\\""),
+                      className.replace("\"", "\\\""),
+                      i,
+                      checkedJson);
+              java.nio.file.Files.write(
+                  java.nio.file.Paths.get("/Users/anatolii/Projects/STA/sbt/.cursor/debug.log"),
+                  logEntry.getBytes("UTF-8"),
+                  java.nio.file.StandardOpenOption.CREATE,
+                  java.nio.file.StandardOpenOption.APPEND);
+            } catch (Exception e) {
+            }
+            // #endregion
+            break;
+          }
+        }
+
+        if (!calledFromWorker) {
+          // #region agent log
+          try {
+            String checkedJson = new Gson().toJson(checkedClasses);
+            String logEntry =
+                String.format(
+                    "{\"id\":\"log_%d_005\",\"timestamp\":%d,\"location\":\"WorkerMain.java:232\",\"message\":\"Framework class filtered - not from worker\",\"data\":{\"className\":\"%s\",\"checkedClasses\":%s},\"sessionId\":\"debug-session\",\"runId\":\"pre-fix\",\"hypothesisId\":\"B,C\"}\n",
+                    System.currentTimeMillis(),
+                    System.currentTimeMillis(),
+                    name.replace("\"", "\\\""),
+                    checkedJson);
+            java.nio.file.Files.write(
+                java.nio.file.Paths.get("/Users/anatolii/Projects/STA/sbt/.cursor/debug.log"),
+                logEntry.getBytes("UTF-8"),
+                java.nio.file.StandardOpenOption.CREATE,
+                java.nio.file.StandardOpenOption.APPEND);
+          } catch (Exception e) {
+          }
+          // #endregion
+          // Filter out Framework when called from test code
+          throw new ClassNotFoundException(
+              name + " filtered out (use project's test-interface instead)");
+        }
+        // #region agent log
+        try {
+          String logEntry =
+              String.format(
+                  "{\"id\":\"log_%d_006\",\"timestamp\":%d,\"location\":\"WorkerMain.java:240\",\"message\":\"Framework class allowed - delegating to system classloader\",\"data\":{\"className\":\"%s\"},\"sessionId\":\"debug-session\",\"runId\":\"pre-fix\",\"hypothesisId\":\"A\"}\n",
+                  System.currentTimeMillis(),
+                  System.currentTimeMillis(),
+                  name.replace("\"", "\\\""));
+          java.nio.file.Files.write(
+              java.nio.file.Paths.get("/Users/anatolii/Projects/STA/sbt/.cursor/debug.log"),
+              logEntry.getBytes("UTF-8"),
+              java.nio.file.StandardOpenOption.CREATE,
+              java.nio.file.StandardOpenOption.APPEND);
+        } catch (Exception e) {
+        }
+        // #endregion
+        // Allow Framework when called from ForkTestMain - delegate to system classloader
+      }
+
       // For all other classes, delegate to system classloader
       Class<?> c = systemLoader.loadClass(name);
       if (resolve) {
