@@ -163,45 +163,42 @@ public final class WorkerMain {
                   }
                 })
             .toArray(URL[]::new);
-    // Use child-first classloader to ensure project dependencies are loaded from classpath
-    // before parent (which may have .sbt/boot jars)
-    return new ChildFirstURLClassLoader(urls, parent);
+    // Use filtering classloader to prevent test code from accessing sbt's Gson from system
+    // classloader
+    // while still allowing system classes to use it internally
+    ClassLoader filteringParent = new FilteringClassLoader(parent);
+    return new URLClassLoader(urls, filteringParent);
   }
 
   /**
-   * A URLClassLoader that uses child-first delegation: it checks its own URLs before delegating to
-   * the parent. This ensures project dependencies from the classpath are loaded instead of versions
-   * from the parent classloader (e.g., .sbt/boot jars).
+   * A classloader that filters out Gson classes, preventing test code from accessing sbt's Gson
+   * from the system classloader. This ensures test code uses the project's Gson version from the
+   * classpath instead of sbt's Gson from .sbt/boot.
+   *
+   * <p>For non-Gson classes, this classloader delegates to the system classloader normally,
+   * allowing system classes (like Framework) to be loaded correctly.
    */
-  private static class ChildFirstURLClassLoader extends URLClassLoader {
-    private final ClassLoader parent;
+  private static class FilteringClassLoader extends ClassLoader {
+    private final ClassLoader systemLoader;
 
-    ChildFirstURLClassLoader(URL[] urls, ClassLoader parent) {
-      super(urls, parent);
-      this.parent = parent;
+    FilteringClassLoader(ClassLoader systemLoader) {
+      super(null); // no parent - we manually delegate
+      this.systemLoader = systemLoader;
     }
 
     @Override
     protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
-      // First, check if the class has already been loaded
-      Class<?> c = findLoadedClass(name);
-      if (c != null) {
-        if (resolve) resolveClass(c);
-        return c;
+      // Filter out Gson classes - don't delegate to system classloader
+      // This prevents test code from accessing sbt's Gson
+      if (name.startsWith("com.google.gson.")) {
+        throw new ClassNotFoundException(name + " filtered out (use project's Gson instead)");
       }
-
-      // Try to find the class in this classloader's URLs first (child-first)
-      try {
-        c = findClass(name);
-        if (resolve) resolveClass(c);
-        return c;
-      } catch (ClassNotFoundException e) {
-        // Class not found in this classloader, delegate to parent
-        if (parent != null) {
-          return parent.loadClass(name);
-        }
-        throw e;
+      // For all other classes, delegate to system classloader
+      Class<?> c = systemLoader.loadClass(name);
+      if (resolve) {
+        resolveClass(c);
       }
+      return c;
     }
   }
 }
