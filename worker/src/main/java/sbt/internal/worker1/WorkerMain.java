@@ -141,7 +141,7 @@ public final class WorkerMain {
   void test(long id, TestInfo info) throws Exception {
     if (info.jvm) {
       RunInfo.JvmRunInfo jvmRunInfo = info.jvmRunInfo;
-      ClassLoader parent = new ForkTestMain().getClass().getClassLoader();
+      ClassLoader parent = ClassLoader.getSystemClassLoader();
       try (URLClassLoader cl = createClassLoader(jvmRunInfo, parent)) {
         ForkTestMain.main(id, info, this.originalOut, cl);
       }
@@ -163,6 +163,45 @@ public final class WorkerMain {
                   }
                 })
             .toArray(URL[]::new);
-    return new URLClassLoader(urls, parent);
+    // Use child-first classloader to ensure project dependencies are loaded from classpath
+    // before parent (which may have .sbt/boot jars)
+    return new ChildFirstURLClassLoader(urls, parent);
+  }
+
+  /**
+   * A URLClassLoader that uses child-first delegation: it checks its own URLs before delegating to
+   * the parent. This ensures project dependencies from the classpath are loaded instead of versions
+   * from the parent classloader (e.g., .sbt/boot jars).
+   */
+  private static class ChildFirstURLClassLoader extends URLClassLoader {
+    private final ClassLoader parent;
+
+    ChildFirstURLClassLoader(URL[] urls, ClassLoader parent) {
+      super(urls, parent);
+      this.parent = parent;
+    }
+
+    @Override
+    protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+      // First, check if the class has already been loaded
+      Class<?> c = findLoadedClass(name);
+      if (c != null) {
+        if (resolve) resolveClass(c);
+        return c;
+      }
+
+      // Try to find the class in this classloader's URLs first (child-first)
+      try {
+        c = findClass(name);
+        if (resolve) resolveClass(c);
+        return c;
+      } catch (ClassNotFoundException e) {
+        // Class not found in this classloader, delegate to parent
+        if (parent != null) {
+          return parent.loadClass(name);
+        }
+        throw e;
+      }
+    }
   }
 }

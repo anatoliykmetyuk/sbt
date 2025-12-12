@@ -339,8 +339,8 @@ public class ForkTestMain {
         Framework framework = null;
         for (final String implClassName : testRunner.implClassNames) {
           try {
-            final Object rawFramework =
-                classLoader.loadClass(implClassName).getDeclaredConstructor().newInstance();
+            final Class<?> frameworkClass = classLoader.loadClass(implClassName);
+            final Object rawFramework = frameworkClass.getDeclaredConstructor().newInstance();
             if (rawFramework instanceof Framework) framework = (Framework) rawFramework;
             else framework = new FrameworkWrapper((org.scalatools.testing.Framework) rawFramework);
             break;
