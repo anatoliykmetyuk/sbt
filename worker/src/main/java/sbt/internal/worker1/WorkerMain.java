@@ -163,6 +163,36 @@ public final class WorkerMain {
                   }
                 })
             .toArray(URL[]::new);
-    return new URLClassLoader(urls, parent);
+    ClassLoader filteringParent = new FilteringClassLoader(parent);
+    return new URLClassLoader(urls, filteringParent);
+  }
+
+  /**
+   * A classloader that filters out Gson classes, preventing test code from accessing sbt's Gson
+   * from the system classloader. This ensures test code uses the project's Gson version from the
+   * classpath instead of sbt's Gson from .sbt/boot.
+   *
+   * <p>For non-Gson classes, this classloader delegates to the system classloader normally,
+   * allowing system classes (like Framework) to be loaded correctly.
+   */
+  private static class FilteringClassLoader extends ClassLoader {
+    private final ClassLoader systemLoader;
+
+    FilteringClassLoader(ClassLoader systemLoader) {
+      super(null); // no parent - we manually delegate
+      this.systemLoader = systemLoader;
+    }
+
+    @Override
+    protected Class<?> loadClass(String name, boolean resolve) throws ClassNotFoundException {
+      if (name.startsWith("com.google.gson.")) {
+        throw new ClassNotFoundException(name + " filtered out (use project's Gson instead)");
+      }
+      Class<?> c = systemLoader.loadClass(name);
+      if (resolve) {
+        resolveClass(c);
+      }
+      return c;
+    }
   }
 }
