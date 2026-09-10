@@ -1112,11 +1112,11 @@ object Defaults extends BuildCommon with DefExtra {
                 ): ClassFileManagerType
             ).toJava
           )
-          .withPipelining(usePipelining.value)
+          .withPipelining(usePipelining.value && compileOrder.value == CompileOrder.Mixed)
       },
       scalacOptions := {
         val old = scalacOptions.value
-        if (exportPipelining.value) {
+        if (effectiveExportPipelining.value) {
           val sv = scalaVersion.value
           val shouldApplyFlags = !ScalaArtifacts.isScala3(sv) || VersionNumber(sv).matchesSemVer(
             SemanticSelector(">=3.5.0")
@@ -2297,7 +2297,7 @@ object Defaults extends BuildCommon with DefExtra {
   private[sbt] def compileScalaBackendTask: Initialize[Task[CompileResult]] = Def.task {
     val setup: Setup = compileIncSetup.value
     val _ = compileIncremental.value
-    val exportP = exportPipelining.value
+    val exportP = effectiveExportPipelining.value
     val c = fileConverter.value
     // Save analysis midway if pipelining is enabled
     val store = analysisStore(compileAnalysisFile.value.toPath(), c)
@@ -2533,7 +2533,7 @@ object Defaults extends BuildCommon with DefExtra {
         cachedPerEntryDefinesClassLookup(classpathEntry)
     val extra = extraIncOptions.value.map(t2)
     val store = analysisStore(earlyCompileAnalysisFile.value.toPath(), converter)
-    val eaOpt = if exportPipelining.value then Some(store) else None
+    val eaOpt = if effectiveExportPipelining.value then Some(store) else None
     Setup.of(
       lookup,
       (compile / skip).value,
@@ -2545,6 +2545,10 @@ object Defaults extends BuildCommon with DefExtra {
       eaOpt.toJava,
       extra.toArray,
     )
+  }
+
+  private[sbt] lazy val effectiveExportPipelining: Initialize[Boolean] = Def.setting {
+    exportPipelining.value && compileOrder.value == CompileOrder.Mixed
   }
 
   def compileInputsSettings: Seq[Setting[?]] =
@@ -2561,7 +2565,7 @@ object Defaults extends BuildCommon with DefExtra {
           c.toVirtualFile(c.toPath(x))
         val eo = CompileOutput(c.toPath(earlyOutput.value))
         val eoOpt =
-          if (exportPipelining.value) Some(eo)
+          if (effectiveExportPipelining.value) Some(eo)
           else None
         CompileOptions.of(
           cp.toArray,
