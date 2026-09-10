@@ -1,0 +1,138 @@
+> diagnose
+> inspect tree jfUp/Compile/incOptions
+> clean
+> arm jfUp/compile jfDiamond/compile
+> jfTail/checkedCompile
+> checkContract jfUp/compile jfDiamond/compile true
+> checkJavaOnly jfJavaOnly/compile
+> jfTail/runMain jf.Main
+> arm sfUp/compile sfDiamond/compile
+> sfTail/checkedCompile
+> checkContract sfUp/compile sfDiamond/compile false
+> checkJavaOnly sfJavaOnly/compile
+> sfTail/runMain sf.Main
+> arm jfUp/test jfDiamond/test
+> jfTail/Test/compile
+> checkContract jfUp/test jfDiamond/test true
+> checkJfScopes
+> jfTail/Test/runMain jftest.Main
+> arm sfUp/test sfDiamond/test
+> sfTail/Test/compile
+> checkContract sfUp/test sfDiamond/test false
+> checkSfScopes
+> sfTail/Test/runMain sftest.Main
+> resetTrace
+> jfTail/checkedCompile
+> sfTail/checkedCompile
+> checkNoCompile
+-> invalidJavaFirst/compile
+-> invalidScalaFirst/compile
+
+$ copy-file changes/jf/UpJava.broken jfUp/src/main/java/jf/UpJava.java
+-> jfTail/compile
+$ copy-file changes/jf/UpJava.original jfUp/src/main/java/jf/UpJava.java
+> jfTail/checkedCompile
+> jfTail/runMain jf.Main
+$ copy-file changes/jf/UpScala.broken jfUp/src/main/scala/jf/UpScala.scala
+-> jfTail/compile
+-> jfTail/compile
+$ copy-file changes/jf/UpScala.original jfUp/src/main/scala/jf/UpScala.scala
+> jfTail/checkedCompile
+$ delete jfUp/src/main/java/jf/UpJava.java
+-> jfTail/compile
+$ copy-file changes/jf/UpJava.original jfUp/src/main/java/jf/UpJava.java
+> jfTail/checkedCompile
+
+$ copy-file changes/sf/UpJava.broken sfUp/src/main/java/sf/UpJava.java
+-> sfTail/compile
+$ copy-file changes/sf/Left.recovered sfLeft/src/main/scala/sf/Left.scala
+$ copy-file changes/sf/Right.recovered sfRight/src/main/scala/sf/Right.scala
+$ copy-file changes/sf/TailJava.recovered sfTail/src/main/java/sf/TailJava.java
+> sfTail/checkedCompile
+> sfTail/runMain sf.Main 46 42
+$ copy-file changes/sf/TailJava.original sfTail/src/main/java/sf/TailJava.java
+$ copy-file changes/sf/Left.original sfLeft/src/main/scala/sf/Left.scala
+$ copy-file changes/sf/Right.original sfRight/src/main/scala/sf/Right.scala
+$ copy-file changes/sf/UpJava.original sfUp/src/main/java/sf/UpJava.java
+> sfTail/checkedCompile
+> sfTail/runMain sf.Main
+$ copy-file changes/sf/UpScala.broken sfUp/src/main/scala/sf/UpScala.scala
+-> sfTail/compile
+$ copy-file changes/sf/UpScala.original sfUp/src/main/scala/sf/UpScala.scala
+> sfTail/checkedCompile
+$ delete sfUp/src/main/java/sf/UpJava.java
+-> sfTail/compile
+$ copy-file changes/sf/UpJava.original sfUp/src/main/java/sf/UpJava.java
+> sfTail/checkedCompile
+
+> clean
+$ copy-file changes/sf/UpJava.badbody sfUp/src/main/java/sf/UpJava.java
+$ copy-file changes/sf/Diamond.failureProbe sfDiamond/src/main/scala/sf/Diamond.scala
+> arm sfUp/compile sfDiamond/compile
+-> sfTail/compile
+> checkContract sfUp/compile sfDiamond/compile false
+$ copy-file changes/sf/Diamond.original sfDiamond/src/main/scala/sf/Diamond.scala
+$ copy-file changes/sf/UpJava.original sfUp/src/main/java/sf/UpJava.java
+> sfTail/checkedCompile
+> sfTail/runMain sf.Main
+
+-> directConsumer/compile
+> plusOneConsumer/compile
+> effectiveJavaFirst/compile
+
+$ delete jfJavaOnly/src/main/java/api/jf/OnlyJava.java
+-> jfTail/compile
+$ copy-file changes/jf/OnlyJava.original jfJavaOnly/src/main/java/api/jf/OnlyJava.java
+> jfTail/checkedCompile
+$ copy-file changes/jf/RenamedJava.java jfJavaOnly/src/main/java/api/jf/RenamedJava.java
+$ delete jfJavaOnly/src/main/java/api/jf/OnlyJava.java
+-> jfTail/compile
+$ delete jfJavaOnly/src/main/java/api/jf/RenamedJava.java
+$ copy-file changes/jf/OnlyJava.original jfJavaOnly/src/main/java/api/jf/OnlyJava.java
+> jfTail/checkedCompile
+
+$ delete sfJavaOnly/src/main/java/api/sf/OnlyJava.java
+-> sfTail/compile
+$ copy-file changes/sf/OnlyJava.original sfJavaOnly/src/main/java/api/sf/OnlyJava.java
+> sfTail/checkedCompile
+$ copy-file changes/sf/RenamedJava.java sfJavaOnly/src/main/java/api/sf/RenamedJava.java
+$ delete sfJavaOnly/src/main/java/api/sf/OnlyJava.java
+-> sfTail/compile
+$ delete sfJavaOnly/src/main/java/api/sf/RenamedJava.java
+$ copy-file changes/sf/OnlyJava.original sfJavaOnly/src/main/java/api/sf/OnlyJava.java
+> sfTail/checkedCompile
+
+$ copy-file changes/jf/OnlyJava.changed jfJavaOnly/src/main/java/api/jf/OnlyJava.java
+> jfTail/checkedCompile
+> jfTail/runMain jf.Main 69
+$ copy-file changes/jf/OnlyJava.original jfJavaOnly/src/main/java/api/jf/OnlyJava.java
+> jfTail/checkedCompile
+> jfTail/runMain jf.Main 67
+
+$ copy-file changes/sf/OnlyJava.changed sfJavaOnly/src/main/java/api/sf/OnlyJava.java
+> sfTail/checkedCompile
+> sfTail/runMain sf.Main 46
+$ copy-file changes/sf/OnlyJava.original sfJavaOnly/src/main/java/api/sf/OnlyJava.java
+> sfTail/checkedCompile
+> sfTail/runMain sf.Main 44
+
+$ copy-file changes/ScalaBase.changed scalaOnly/src/main/scala/api/ScalaBase.scala
+> jfTail/checkedCompile
+> sfTail/checkedCompile
+> jfTail/runMain jf.Main 73 66
+> sfTail/runMain sf.Main 53 48
+$ copy-file changes/ScalaBase.original scalaOnly/src/main/scala/api/ScalaBase.scala
+> jfTail/checkedCompile
+> sfTail/checkedCompile
+> jfTail/runMain jf.Main
+> sfTail/runMain sf.Main
+
+> deleteEarlyOutputs
+> resetTrace
+> jfTail/checkedCompile
+> checkNoCompile
+> checkEarlyRestored
+> jfTail/runMain jf.Main
+
+> crossScalaFirst/compile
+> crossJavaFirst/compile

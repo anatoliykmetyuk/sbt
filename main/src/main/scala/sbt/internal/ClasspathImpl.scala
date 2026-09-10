@@ -39,7 +39,7 @@ private[sbt] object ClasspathImpl {
   def exportedPicklesTask: Initialize[Task[Classpath]] =
     Def.task {
       // conditional task: do not refactor
-      if Defaults.effectiveExportPipelining.value then
+      if exportPipelining.value then
         val module = projectID.value
         val config = configuration.value
         val products = pickleProducts.value

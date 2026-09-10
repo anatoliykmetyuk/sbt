@@ -1071,7 +1071,12 @@ object Defaults extends BuildCommon with DefExtra {
       compileJava := Def.uncached(compileJavaTask.value),
       compileSplit := {
         // conditional task
-        if (incOptions.value.pipelining) Def.uncached(compileJava.value)
+        if (
+          incOptions.value.pipelining &&
+          !(compileOrder.value == CompileOrder.JavaThenScala &&
+            sourcesVF.value.exists(_.id.endsWith(".scala")))
+        )
+          Def.uncached(compileJava.value)
         else Def.uncached(compileScalaBackend.value)
       },
       internalDependencyConfigurations := InternalDependencies.configurations.value,
@@ -1112,11 +1117,17 @@ object Defaults extends BuildCommon with DefExtra {
                 ): ClassFileManagerType
             ).toJava
           )
-          .withPipelining(usePipelining.value && compileOrder.value == CompileOrder.Mixed)
+          .withPipelining(usePipelining.value)
       },
       scalacOptions := {
         val old = scalacOptions.value
-        if (effectiveExportPipelining.value) {
+        def withoutPipeliningFlags(options: List[String]): List[String] = options match {
+          case "-Ypickle-write" :: _ :: rest => withoutPipeliningFlags(rest)
+          case "-Ypickle-java" :: rest       => withoutPipeliningFlags(rest)
+          case head :: rest                  => head :: withoutPipeliningFlags(rest)
+          case Nil                           => Nil
+        }
+        if (exportPipelining.value) {
           val sv = scalaVersion.value
           val shouldApplyFlags = !ScalaArtifacts.isScala3(sv) || VersionNumber(sv).matchesSemVer(
             SemanticSelector(">=3.5.0")
@@ -1127,10 +1138,10 @@ object Defaults extends BuildCommon with DefExtra {
                 "-Ypickle-java",
                 "-Ypickle-write",
                 fileConverter.value.toPath(earlyOutput.value).toString
-              ) ++ old
+              ) ++ withoutPipeliningFlags(old.toList)
             )
-          else Def.uncached(old)
-        } else Def.uncached(old)
+          else Def.uncached(withoutPipeliningFlags(old.toList))
+        } else Def.uncached(withoutPipeliningFlags(old.toList))
       },
       scalacOptions := {
         val old = scalacOptions.value
@@ -2297,7 +2308,7 @@ object Defaults extends BuildCommon with DefExtra {
   private[sbt] def compileScalaBackendTask: Initialize[Task[CompileResult]] = Def.task {
     val setup: Setup = compileIncSetup.value
     val _ = compileIncremental.value
-    val exportP = effectiveExportPipelining.value
+    val exportP = exportPipelining.value
     val c = fileConverter.value
     // Save analysis midway if pipelining is enabled
     val store = analysisStore(compileAnalysisFile.value.toPath(), c)
@@ -2385,6 +2396,7 @@ object Defaults extends BuildCommon with DefExtra {
             res
           case Result.Inc(cause) =>
             ping.tryComplete(Result.Value(false))
+            ConcurrentRestrictions.cancelCurrentSentinels()
             val compileFailed = cause.directCause.collect { case c: CompileFailed => c }
             reporter.sendFailureReport(ci.options.sources, compileFailed)
             bspTask.notifyFailure(compileFailed)
@@ -2433,6 +2445,13 @@ object Defaults extends BuildCommon with DefExtra {
       // which forces a recompile, rather than a current analysis paired with an outdated zip.
       store.set(contents)
       Def.declareOutput(analysisOut)
+      ci.options.earlyOutput.toScala.flatMap(_.getSingleOutputAsPath.toScala).foreach { earlyJar =>
+        val earlyAnalysis =
+          (earlyCompileAnalysisFile.value: @scala.annotation.nowarn("msg=transient key")).toPath()
+        if (Files.exists(earlyJar)) Def.declareOutput(c.toVirtualFile(earlyJar))
+        if (ci.setup.earlyAnalysisStore.isPresent && Files.exists(earlyAnalysis))
+          Def.declareOutput(c.toVirtualFile(earlyAnalysis))
+      }
       s.log.debug(s"wrote $vfDir")
       (analysisResult.hasModified(), vfDir: VirtualFileRef, packedDir: HashedVirtualFileRef)
     }
@@ -2510,7 +2529,7 @@ object Defaults extends BuildCommon with DefExtra {
       case e: Throwable =>
         if !promise.isCompleted then
           promise.failure(e)
-          ConcurrentRestrictions.cancelAllSentinels()
+          ConcurrentRestrictions.cancelCurrentSentinels()
         throw e
     finally x.close() // workaround for #937
   }
@@ -2533,7 +2552,7 @@ object Defaults extends BuildCommon with DefExtra {
         cachedPerEntryDefinesClassLookup(classpathEntry)
     val extra = extraIncOptions.value.map(t2)
     val store = analysisStore(earlyCompileAnalysisFile.value.toPath(), converter)
-    val eaOpt = if effectiveExportPipelining.value then Some(store) else None
+    val eaOpt = if exportPipelining.value then Some(store) else None
     Setup.of(
       lookup,
       (compile / skip).value,
@@ -2547,17 +2566,28 @@ object Defaults extends BuildCommon with DefExtra {
     )
   }
 
-  private[sbt] lazy val effectiveExportPipelining: Initialize[Boolean] = Def.setting {
-    exportPipelining.value && compileOrder.value == CompileOrder.Mixed
-  }
-
   def compileInputsSettings: Seq[Setting[?]] =
-    compileInputsSettings(dependencyPicklePath)
-  def compileInputsSettings(classpathTask: TaskKey[Classpath]): Seq[Setting[?]] = {
+    compileInputsSettings0(dependencyPicklePath, true)
+  def compileInputsSettings(classpathTask: TaskKey[Classpath]): Seq[Setting[?]] =
+    compileInputsSettings0(classpathTask, classpathTask == dependencyPicklePath)
+  private def compileInputsSettings0(
+      classpathTask: TaskKey[Classpath],
+      defaultClasspath: Boolean
+  ): Seq[Setting[?]] = {
+    val compileClasspath = Def.taskIf {
+      if (
+        defaultClasspath && incOptions.value.pipelining &&
+        compileOrder.value == CompileOrder.JavaThenScala &&
+        sourcesVF.value.exists(_.id.endsWith(".scala")) &&
+        sourcesVF.value.exists(_.id.endsWith(".java"))
+      )
+        filteredDependencyClasspath.value
+      else classpathTask.value
+    }
     Seq(
       compileOptions := Def.uncached {
         val c = fileConverter.value
-        val cp0 = classpathTask.value
+        val cp0 = compileClasspath.value
         // backendOutput is a settingKey: its listing is captured at project load, so re-convert
         val cp = c.toVirtualFile(c.toPath(backendOutput.value)) +: data(cp0).map(c.toVirtualFile)
         val vs0 = sourcesVF.value
@@ -2565,7 +2595,7 @@ object Defaults extends BuildCommon with DefExtra {
           c.toVirtualFile(c.toPath(x))
         val eo = CompileOutput(c.toPath(earlyOutput.value))
         val eoOpt =
-          if (effectiveExportPipelining.value) Some(eo)
+          if (exportPipelining.value) Some(eo)
           else None
         CompileOptions.of(
           cp.toArray,
@@ -2604,7 +2634,7 @@ object Defaults extends BuildCommon with DefExtra {
       },
       // todo: Zinc's hashing should automatically handle directories
       compileInputs2 := Def.uncached {
-        val cp0 = classpathTask.value
+        val cp0 = compileClasspath.value
         val inputs = compileInputs.value
         val c = fileConverter.value
         val incrementalOptions = extraIncOptions.value.toVector

@@ -64,6 +64,21 @@ object ConcurrentRestrictions {
     case _                  =>
   }
 
+  private val currentService = new ThreadLocal[CancelSentinels]
+
+  private[sbt] def cancelCurrentSentinels(): Unit =
+    Option(currentService.get()).foreach(_.cancelSentinels())
+
+  private def withCurrentService[A](service: CancelSentinels)(work: => A): A = {
+    val previous = currentService.get()
+    currentService.set(service)
+    try work
+    finally {
+      if (previous == null) currentService.remove()
+      else currentService.set(previous)
+    }
+  }
+
   /**
    * A ConcurrentRestrictions instance that places no restrictions on concurrently executing tasks.
    */
@@ -238,17 +253,22 @@ object ConcurrentRestrictions {
       private val sentinels: mutable.ListBuffer[JFuture[?]] = mutable.ListBuffer.empty
 
       def cancelSentinels(): Unit = {
-        sentinels.toList foreach { s =>
-          s.cancel(true)
+        val pendingSentinels = synchronized {
+          val result = sentinels.toList
+          sentinels.clear()
+          result
         }
-        sentinels.clear()
+        pendingSentinels.foreach(_.cancel(true))
       }
 
       def submit(node: TaskId[?], work: () => Completed): Unit = synchronized {
         if closed.get then throw new RejectedExecutionException
         else if isSentinel(node) then
           // skip all checks for sentinels
-          sentinels += CompletionService.submitFuture(work, jservice)
+          sentinels += CompletionService.submitFuture(
+            () => withCurrentService(this)(work()),
+            jservice
+          )
         else
           val newState = tags.add(tagState, node)
           // if the new task is allowed to run concurrently with the currently running tasks,
@@ -266,8 +286,10 @@ object ConcurrentRestrictions {
       private def submitValid(node: TaskId[?], work: () => Completed): Unit = {
         running += 1
         val wrappedWork = () =>
-          try work()
-          finally cleanup(node)
+          withCurrentService(this) {
+            try work()
+            finally cleanup(node)
+          }
         CompletionService.submitFuture(wrappedWork, jservice)
         ()
       }

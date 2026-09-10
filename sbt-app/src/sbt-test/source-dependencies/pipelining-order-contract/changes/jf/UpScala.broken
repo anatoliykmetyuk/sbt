@@ -1,0 +1,8 @@
+/*
+ * sbt
+ * Copyright 2026, Scala Center, and the sbt contributors.
+ * Licensed under Apache License 2.0 (see LICENSE).
+ */
+
+package jf
+class UpScala { def renamed: Int = new UpJava().value() + new api.ScalaBase().value }
