@@ -10,10 +10,11 @@ package sbt
 package internal
 
 import java.io.File
+import java.nio.file.Path
 import java.util.concurrent.ConcurrentHashMap
 import Keys.{ fileConverter, fullClasspath, streams }
 import sbt.Def.Initialize
-import sbt.internal.inc.Analysis
+import sbt.internal.inc.{ Analysis, MappedFileConverter }
 import sbt.internal.util.Attributed
 import sbt.internal.util.Types.const
 import sbt.io.{ GlobFilter, IO, NameFilter }
@@ -81,7 +82,7 @@ object IncrementalTest:
       val project = Keys.thisProject.value
       (
         project.id,
-        fileConverter.value.toVirtualFile(project.base.toPath).id,
+        projectPathId(project.base.toPath, fileConverter.value),
         Keys.configuration.value.name,
         Keys.platform.value,
       )
@@ -94,6 +95,14 @@ object IncrementalTest:
         case None     => Nil
     )*)
   }
+
+  private[sbt] def projectPathId(path: Path, converter: FileConverter): String =
+    converter match
+      case mapped: MappedFileConverter if mapped.getClass == classOf[MappedFileConverter] =>
+        mapped.rootPaths2.find((_, root) => path.startsWith(root)) match
+          case Some((key, root)) => s"$${$key}/${root.relativize(path)}".replace('\\', '/')
+          case None              => converter.toVirtualFile(path).id
+      case _ => converter.toVirtualFile(path).id
 
   def extraTestDigestsTask: Initialize[Task[Seq[Digest]]] = Def.cachedTask {
     // by default this captures JVM version
